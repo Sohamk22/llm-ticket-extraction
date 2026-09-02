@@ -1,0 +1,62 @@
+# ==============================================================================
+# Git Ignore for AI in Practice Lab 1
+# ==============================================================================
+
+# --- Secrets & Environment Variables (CRITICAL) ---
+.env
+.env.*
+!.env.example
+
+# --- Python Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Course & Framework Runtime Caches ---
+.aip_cache/
+.aip_traces/
+.chroma/
+
+# --- Python Bytecode & Compilation Artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# --- Testing, Coverage & Linter Caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+htmlcov/
+
+# --- Operating System & Editor Files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- IDEs & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Jupyter Notebook Checkpoints ---
+.ipynb_checkpoints/
+
+# --- Distribution & Build Artifacts ---
+build/
+dist/
+*.egg-info/
+*.egg
