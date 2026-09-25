@@ -137,19 +137,25 @@ def raw_call(
 
     last_exc: Exception | None = None
     with tracing.trace("llm.call", model=model, cached=False) as span:
-        for attempt in range(settings.max_retries):
+        for attempt in range(max(settings.max_retries, 6)):
             t0 = time.perf_counter()
             try:
                 resp = completion(**kwargs)
                 break
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                if not _is_retryable(exc) or attempt == settings.max_retries - 1:
+                if not _is_retryable(exc) or attempt == max(settings.max_retries, 6) - 1:
                     span["error_kind"] = type(exc).__name__
                     raise
-                # Exponential backoff with full jitter — the standard fix for
-                # a fleet of 27 students hitting one rate limit at once.
-                sleep_s = min(30.0, (2 ** attempt)) * random.random()
+                # Exponential backoff with jitter
+                sleep_s = min(30.0, 2.0 ** attempt + random.uniform(1.0, 3.0))
+                msg = str(exc).lower()
+                if "retry in " in msg:
+                    try:
+                        delay_s = float(msg.split("retry in ")[1].split("s")[0].strip())
+                        sleep_s = max(sleep_s, delay_s + 1.0)
+                    except Exception:
+                        pass
                 tracing.event("llm.retry", attempt=attempt + 1, sleep_s=round(sleep_s, 2),
                               error=type(exc).__name__)
                 time.sleep(sleep_s)

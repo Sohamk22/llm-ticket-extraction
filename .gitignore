@@ -60,3 +60,5 @@ build/
 dist/
 *.egg-info/
 *.egg
+AI-in-Practice-Lab*/
+

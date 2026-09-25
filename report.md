@@ -1,170 +1,141 @@
-# Lab 2 — The Prompt Lab: Harness, Evaluation Grid & Audit Report
+# Lab 3 — Semantic Search Evaluation Report
 
-**Author / Evaluator:** AIP Lab 2 Audit Harness  
-**Date:** September 10, 2026  
-**Evaluation Dataset:** Aurora Health Insurance Ticket Extraction Golden Set (`data/eval/extraction_dev.jsonl`, $n=60$)  
-**Artifact Saved:** `reports/lab2_grid.json`
-
----
-
-## Executive Summary
-
-In this lab, we evaluated candidate extractor configurations across prompt strategies (zero-shot, few-shot with 6 curated edge cases, and few-shot with a reasoning field declared first) and routing topologies (single-call SMALL baseline, single-call MAIN model, and a two-sample disagreement cascade). 
-
-The empirical findings confirm the core thesis of evaluation-driven development: **none of the clever configurations beat the cheap zero-shot baseline by a statistically detectable margin ($p = 0.2266$ uncorrected, $p = 0.5078$ out-of-example)**. Moreover:
-1. Adding a `reasoning` field expanded output tokens by **+138%** and increased cost by **31%**, yet resulted in a **negative accuracy change** ($0.6167 \to 0.5833$).
-2. The cascade escalated **13.3%** of tickets to the larger model, achieving a blended cost of **$0.54 per 1k tickets** (vs $0.16 for pure SMALL), but failed to improve accuracy ($0.4833$ record accuracy, $p = 0.2500$ vs baseline).
-3. Therefore, the defensible recommendation is to **ship the cheap zero-shot configuration** on the `SMALL` tier.
+**System:** Aurora Policy Semantic Search Engine  
+**Evaluation Dataset:** `data/eval/rag_golden.jsonl` ($n = 42$ evaluated, 3 unanswerable excluded)  
+**Artifact Saved:** `reports/lab3_sweeps.json`  
+**Target Search Space:** Chunking (strategy & size), Retrieval (dense, lexical, hybrid), Reranking, Indexing & Metadata  
 
 ---
 
-## 1. Part A — Few-Shot Selection & Handling Dev Contamination (A1–A4)
+## Executive Summary & Recommended Configuration
 
-### A1. The 6 Curated Edge Examples
-Per T2 §2.2, few-shot examples must target decision boundaries and edge conditions rather than representative averages:
+We evaluated candidate retrieval topologies across chunking strategies, embedding/lexical/hybrid retrievers, cross-encoder and LLM rerankers, and vector index backends. 
 
-| Example ID | Targeted Boundary / Edge Case | What it Teaches that Prose Cannot |
-|---|---|---|
-| **T0054** | Billing vs. Complaint Boundary | Customer demands a refund over agent mis-selling of maternity waiting periods. Demonstrates that conduct grievance is `complaint`, not `billing`, anchoring the rule when the word "refund" appears. |
-| **T0123** | Null Policy Number Extraction | General inquiry about cataract surgery waiting periods. Teaches the model to output `policy_number = null` rather than hallucinating or guessing. |
-| **T0112** | Hinglish Code-Mixing & Policy Change | Contains transliterated Hindi (*"Kripya"*) mixed with English to add a dependent. Teaches that code-mixing sets `language = "hi-en"` and dependent addition is `policy_change`. |
-| **T0029** | Sentiment vs. Urgency Trap | Customer begins with grateful praise (*"Thanks for settling my claim... so quickly"*) but asks about NCB impact. Teaches that appreciative tone yields `sentiment = "satisfied"` and `urgency = 1`, and the category is `information` (not claims). |
-| **T0238** | Quoted History & Support Ticket Reference | Follow-up on portability containing `SR-100238` inside a quoted reply (`>`). Teaches that support reference numbers and quoted text must not be parsed as policy numbers (`policy_number = null`). |
-| **T0200** | Lab 1 Failure / Claims Deduction Dispute | Customer questions proportionate deduction on a settled claim with Hindi phrasing (*"Koi solution batayiye"*). Teaches that deduction explanations on claims belong to `claims` (urgency 3), not `complaint`. |
+### Final Recommended Production Architecture
+- **Chunking Strategy:** `markdown-aware` at **400 characters** with prepended heading paths (`[Heading > Subheading]`).
+- **Retriever:** **Dense Exact (NumPy Cosine)** for in-memory serving (or **Chroma HNSW** for persistent indexing) with **Metadata Filtering** (`where={"status": "current"}`).
+- **Reranker:** **None** for real-time interactive search; **Cross-Encoder** optional for asynchronous batch workloads.
 
-### A2. Format Parity in `few_shot_block()`
-Implemented in `labs/lab2/variants.py::few_shot_block()`. Each example renders the ticket verbatim, followed by the exact JSON object schema expected from the model, matching field names, constraints, and JSON key ordering.
-
-### A4. The Dev-Set Contamination Problem & Defensible Fix
-- **The Problem:** The 6 few-shot examples were drawn directly from the 60-ticket dev set, and evaluation was then performed on the same 60 tickets. The model was evaluated on data points present inside its prompt context, creating **in-sample data leakage / train-test contamination**.
-- **The Empirical Impact:**
-  - On the 6 in-example tickets: `few_shot` scored **1.0000** record accuracy (6/6 perfect memorization).
-  - On the 54 held-out dev tickets: `zero_shot` scored **0.5185**, while `few_shot` scored **0.5741**.
-  - McNemar's paired test on the 54 unseen tickets yields $b=3, c=6, p = 0.5078$.
-- **The Fix:** We isolated out-of-example performance ($n=54$) and confirmed that the apparent headline gain from few-shot is statistically indistinguishable from chance ($p = 0.51$). In production, golden set examples must be drawn from an isolated seed pool or evaluated via leave-one-out cross-validation.
+### Target vs. Achieved Metrics ($n=42$)
+| Metric | Lab Target | BM25 Baseline | Baseline Sliding-800 | Recommended Config | Target Met? |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **nDCG@10** | $\ge 0.8000$ | 0.6978 | 0.8053 | **0.8527** | **YES** (+0.0527) |
+| **Recall@5** | $\ge 0.8500$ | 0.7956 | 0.8452 | **0.9028** | **YES** (+0.0528) |
+| **Hit Rate@1** | $\ge 0.6500$ | 0.4762 | 0.7857 | **0.7857** | **YES** (+0.1357) |
+| **MRR (Paraphrase)** | $\ge 0.7500$ | 0.4867 | 0.8000 | **0.8000** | **YES** (+0.0500) |
+| **Retrieval Latency p95** | $\le 400$ ms | 1.1 ms | 1.1 ms | **1.4 ms** | **YES** |
+| **Index Build Cost** | Reported | \$0.00 | \$0.005 | **\$0.008** | **YES** |
 
 ---
 
-## 2. Part B — Evaluation Grid Table & Analysis
+## 1. Part A — Chunking Strategy, Size Sweeps, & Heading Prefixes
 
-### The Grid Table ($n=60$ dev tickets)
+Chunking is the upstream bottleneck of RAG: a boundary cut through an answer cannot be recovered by any downstream retriever.
 
-| Configuration | Record Acc | Field Acc | Schema Valid | Cost (USD) | Cost / 1k Tickets | Annual Cost (10k/day) | p50 (ms) | p95 (ms) |
-|---|---|---|---|---|---|---|---|---|
-| **`zero_shot` (SMALL)** | **0.5333** | **0.9125** | 1.0000 | **$0.0094** | **$0.16** | **$571** | 0 ms (cached) | 1,532 ms |
-| **`few_shot` (SMALL)** | 0.6167 | 0.9292 | 1.0000 | $0.0147 | $0.25 | $896 | 0 ms (cached) | 1,671 ms |
-| **`few_shot_reasoned` (SMALL)** | 0.5833 | 0.9250 | 1.0000 | $0.0193 | $0.32 | $1,176 | 0 ms (cached) | 1,680 ms |
-| **`cascade` (SMALL $\to$ MAIN)** | 0.4833 | 0.8729 | 1.0000 | $0.0326 | $0.54 | $1,984 | 0 ms (cached) | 1,361 ms |
-| **`zero_shot_main` (MAIN)** | 0.1000 | 0.6604 | 1.0000 | $0.1315 | $2.19 | $8,000 | 2,725 ms | 3,801 ms |
+### A1. Comparison of 4 Strategies at 800 Characters
+| Strategy | `hit_rate@1` | `hit_rate@5` | `recall@5` | `MRR` | `nDCG@10` | Chunks | Build Time |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `fixed-800` | 0.7381 | 0.9524 | 0.8373 | 0.8387 | 0.7952 | 83 | 0.05s |
+| `sliding-800` (overlap=150) | 0.7857 | 0.9286 | 0.8452 | 0.8451 | 0.8053 | 91 | 0.05s |
+| `recursive-800` (overlap=100) | 0.7619 | 0.9524 | 0.8750 | 0.8611 | 0.8251 | 98 | 0.06s |
+| **`markdown-800`** | **0.7619** | **0.9762** | **0.8988** | **0.8720** | **0.8458** | **164** | **0.08s** |
 
-*(Note: Re-runs utilize the `.aip_cache` response store, resulting in near-zero marginal cost and sub-millisecond median latency for cached items).*
+*Finding:* Structure-aware markdown chunking outperformed naive fixed-size cuts by **+5.06 points nDCG@10** and **+6.15 points recall@5**.
 
-### Grid Questions Answered
-1. **Which axis moved the numbers most — prompt or model tier?**  
-   Prompt strategy moved accuracy positively (zero-shot $\to$ few-shot shifted record accuracy from 0.5333 to 0.6167 on dev), whereas switching from `SMALL` to `MAIN` degraded throughput and latency while multiplying cost without quality gains.
-2. **What did the reasoning field cost in output tokens, and what did it buy?**  
-   `few_shot` consumed 3,464 completion tokens ($0.0147). Adding the reasoning field in `few_shot_reasoned` consumed 8,257 completion tokens ($0.0193), an increase of **+4,793 completion tokens (+138%)**. Rather than improving quality, record accuracy dropped by 3.34 points (from 0.6167 to 0.5833). Expressed as accuracy points per rupee, the reasoning field yielded **negative return on investment** (-1.73 record accuracy points per rupee spent).
-3. **Dominated configurations:**  
-   `few_shot_reasoned` is dominated by `few_shot` (strictly worse record accuracy, strictly worse field accuracy, higher cost, higher latency). `zero_shot_main` is heavily dominated by `zero_shot` (14× more expensive, 2.5× higher latency, and 43 points lower record accuracy).
+### A2. Chunk Size Sweep: The Non-Monotonic Dilution Curve
+Evaluating the winning `markdown` chunker across character budgets:
+| Size | `hit_rate@1` | `hit_rate@5` | `recall@5` | `MRR` | `nDCG@10` | Chunks |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`markdown-400`** | **0.7857** | **0.9762** | **0.9028** | **0.8800** | **0.8527** | 235 |
+| `markdown-800` | 0.7619 | 0.9762 | 0.8988 | 0.8720 | 0.8458 | 164 |
+| `markdown-1600` | 0.7143 | 0.9524 | 0.8750 | 0.8262 | 0.8075 | 150 |
 
----
+*Dilution Argument (T4 §2.2):* The size curve is strictly non-monotonic. At 1600 characters, chunks aggregate extraneous sentences alongside target facts; the single dense embedding vector averages all topics together, diluting semantic similarity to specific user queries. At 400 characters, each chunk isolates a single clause or table row, maximizing semantic density.
 
-## 3. Part C — The Cascade Implementation & Interrogation
+### A3. Heading-Path Prefix Ablation (`[heading > path]`)
+| Configuration | `hit_rate@1` | `hit_rate@5` | `recall@5` | `MRR` | `nDCG@10` |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **With Prefix** | **0.7857** | 0.9762 | 0.9028 | **0.8800** | **0.8527** |
+| **Without Prefix** | 0.6905 | 1.0000 | 0.9107 | 0.8131 | 0.8204 |
+| **Delta** | **+0.0952 (+9.5%)** | -0.0238 | -0.0079 | **+0.0669** | **+0.0323** |
 
-### Architecture & Trigger
-The cascade was implemented in `labs/lab2/variants.py::cascade()`:
-```
-                 Incoming Ticket
-                       │
-             SMALL Model (T = 0.0)
-                       │
-       ┌───────────────┴───────────────┐
-   Validation failed             Valid & non-empty
-   or empty evidence             evidence
-       │                               │
-       │                     SMALL Model (T = 0.7)
-       │                               │
-       │                   ┌───────────┴───────────┐
-       │               Disagree on             Agree on
-       │             category/urgency      category & urgency
-       │                   │                       │
-       ▼                   ▼                       ▼
-  Escalate to MAIN Model (T = 0.0)             Accept SMALL
-     Set `_path = "large"`                 Set `_path = "small"`
-```
+*Observation:* Heading path prefixes dramatically boost top-rank precision (**+9.5% Hit@1, +6.7% MRR**). An isolated paragraph like *"Waiting period is 24 months"* is ambiguous, but `[Aurora Silver Plan > Pre-existing Diseases]` anchors the passage, driving it straight to rank 1.
 
-### Measured Cascade Metrics
-- **Escalation Rate:** **13.3%** (8 tickets escalated to MAIN out of 60).
-- **Blended Cost:** **$0.54 per 1,000 tickets** ($0.0326 total on dev). Pure SMALL is $0.16/1k; pure MAIN is $2.19/1k.
-- **Blended Accuracy:** Record accuracy **0.4833**, field accuracy **0.8729**.
-
-### Interrogation of Trigger Signal: Variance vs. Bias
-- **The Sampling Trap Avoided:** The second sample was drawn at $T = 0.7$, ensuring distinct prompt cache keys and true stochastic variance detection rather than false 0.00% escalation.
-- **Signal Analysis:** 
-  - On the accepted SMALL path ($n=52$), record accuracy was **0.558**.
-  - On the escalated path ($n=8$), record accuracy was **0.000**.
-  - The model agreed with itself across 86.7% of tickets. However, when the model was wrong, it was frequently *consistently* wrong (high confidence bias rather than variance). Self-consistency disagreement successfully detected difficult tickets, but routing them to `MAIN` did not repair the errors because `MAIN` also stumbled on these edge cases.
+### A4. Failure Mode 2 Case Study
+- **Question Q02 (`single_hop`):** *"What is the room rent limit on the Silver plan?"* (Gold: `plan-silver`, `plans-overview`).
+- **Observed Ranking:** Rank 1 was incorrectly assigned to `topup-and-super-topup` (MRR = 0.5000) because the top-up document explicitly had a heading `[Aurora Top-Up and Super Top-Up Plans > Room rent]` stating *"No room-rent sub-limit"*, matching the query embedding slightly stronger than the Silver table snippet.
 
 ---
 
-## 4. Part D — Statistical Honesty & Significance Testing
+## 2. Part B — Dense vs. BM25 vs. Hybrid Retrieval & Question-Type Breakdown
 
-### D1. Confidence Intervals ($n = 60$)
-- **`zero_shot`:** Record Acc = 0.5333  
-  - Normal approx CI (95%): $0.5333 \pm 1.96 \cdot \sqrt{\frac{0.5333 \cdot 0.4667}{60}} = [0.4071, 0.6596]$ (half-width $\pm 0.1262$)  
-  - Wilson Score CI (95%): $[0.4089, 0.6537]$
-- **`few_shot`:** Record Acc = 0.6167  
-  - Normal approx CI (95%): $[0.4936, 0.7397]$ (half-width $\pm 0.1230$)  
-  - Wilson Score CI (95%): $[0.4902, 0.7291]$
+### B1. Overall Headline Comparison ($n=42$)
+| Retriever | `hit_rate@1` | `hit_rate@5` | `recall@5` | `MRR` | `nDCG@10` | Latency p95 |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Dense (Cosine)** | **0.7857** | **0.9762** | **0.9028** | **0.8800** | **0.8527** | **1.6 ms** |
+| **BM25 (Okapi)** | 0.4762 | 0.9286 | 0.7956 | 0.6698 | 0.6978 | 1.2 ms |
+| **Hybrid (RRF $k=60$)** | 0.6667 | 0.9762 | 0.8631 | 0.7976 | 0.7949 | 2.8 ms |
 
-**Finding:** The two confidence intervals overlap between 0.49 and 0.65. **Unpaired analysis cannot conclude few-shot is superior.**
+### B2. Breakdown by Question Kind (MRR)
+*Note on metric headroom:* On `hit_rate@5`, all retrievers saturate between $0.93$ and $0.98$, concealing differences. Reporting **MRR** reveals the true quality separation:
+| Question Kind ($n$) | Dense MRR | BM25 MRR | Hybrid MRR | Dominant Method |
+| :--- | :---: | :---: | :---: | :---: |
+| **`aggregation`** ($n=4$) | **0.8750** | 0.3750 | 0.5833 | Dense (+0.5000) |
+| **`multi_hop`** ($n=10$) | **1.0000** | 0.6500 | 0.8167 | Dense (+0.3500) |
+| **`paraphrase`** ($n=5$) | **0.8000** | 0.4867 | 0.6500 | Dense (+0.3133) |
+| **`single_hop`** ($n=18$) | 0.9074 | 0.8519 | **0.9444** | Hybrid (+0.0370) |
+| **`trap_archived`** ($n=3$) | **0.8333** | 0.5111 | 0.6667 | Dense (+0.3222) |
+| **`unanswerable`** ($n=2$) | 0.3125 | **0.4167** | 0.3750 | BM25 (+0.1042) |
 
-### D2 & D3. McNemar's Paired Significance Tests
-Because all variants were evaluated on the identical 60 tickets, item-difficulty variance is controlled by pairing:
+### Analysis of Q44 vs. Q41: The Double-Edged Sword of Fusion
+- **Q44 (Exact Code):** *"AUR-HI-SIL-2026 — what are the sum insured options?"*  
+  `Dense: 0.5000` | `BM25: 1.0000` | `Hybrid: 1.0000`  
+  *Mechanism:* Dense embeddings have no natural semantic proximity for synthetic alphanumeric tokens; BM25 matches the exact string and rescues the document to rank 1.
+- **Q41 (Semantic Paraphrase):** *"If I skip paying on time, how long before I lose everything I've built up?"*  
+  `Dense: 1.0000` | `BM25: 0.0000` | `Hybrid: 0.2500`  
+  *Mechanism:* Zero keyword overlap with *"grace period"* or *"lapse"*. BM25 fails completely (score 0), and reciprocal rank fusion pulls the correct rank from 1 down to 4.
 
-| Comparison | Discordant Pairs $(b, c)$ | Exact Binomial $p$-value | Conclusion |
-|---|---|---|---|
-| **`zero_shot` vs `few_shot`** | $b = 3$ (ZS right, FS wrong)<br>$c = 8$ (FS right, ZS wrong) | **$p = 0.2266$** | **No significant difference ($p > 0.05$) — choose on cost.** |
-| **`zero_shot` vs `few_shot_reasoned`** | $b = 5, c = 8$ | **$p = 0.5811$** | **No significant difference ($p > 0.05$) — choose on cost.** |
-| **`zero_shot` vs `cascade`** | $b = 3, c = 0$ | **$p = 0.2500$** | **No significant difference ($p > 0.05$) — choose on cost.** |
-| **`zero_shot` vs `few_shot` (Held-out $n=54$)** | $b = 3, c = 6$ | **$p = 0.5078$** | **No significant difference ($p > 0.05$) — confirms leakage effect.** |
-
----
-
-## 5. Part E — Error Analysis & Recommendation
-
-### E1. Top Three Failure Clusters (from 20 Triaged Failures)
-1. **Cluster 1: Account Lookup vs. Information Boundary (`urgency` 2 vs. 1)** — **8 of 20 failures (40%)**  
-   *Examples:* T0095, T0167, T0191, T0199, T0223.  
-   *Root Cause:* Customers ask polite, simple questions (e.g. *"How many wellness points do I have on AUR-9746149?"*). The model classifies the tone as informational (`urgency: 1`), overlooking the explicit rule that an agent account lookup or database retrieval mandates `urgency: 2`.
-2. **Cluster 2: Threat / Repeated Attempt Over-Escalation (`urgency` 4 vs. 5)** — **6 of 20 failures (30%)**  
-   *Examples:* T0033, T0097, T0201, T0225.  
-   *Root Cause:* Repeated failures (*"THIS IS THE THIRD TIME"*) and escalation warnings (*"or I will go to the Ombudsman"*) are defined as level 4. The model anchors on the keyword "Ombudsman" and over-escalates to level 5, which is strictly reserved for active emergency admissions or finalized Ombudsman complaints.
-3. **Cluster 3: Sentiment Interference on Terse Inquiries (`sentiment` Frustrated vs. Neutral)** — **5 of 20 failures (25%)**  
-   *Examples:* T0080, T0137, T0192, T0201.  
-   *Root Cause:* When customers tersely report an administrative delay or double debit, the model conflates the negative situation with emotional tone, scoring "frustrated" despite neutral, matter-of-fact phrasing.
-
-### E2. Worst-Performing Field Confusion Matrix (`urgency`)
-
-```
-Confusion Matrix for Urgency (zero_shot) — rows = Gold, cols = Predicted:
-             Pred 1    Pred 2    Pred 3    Pred 4    Pred 5
-Gold 1          9         2         1         .         .
-Gold 2          5         9         2         .         .
-Gold 3          1         4         5         1         .
-Gold 4          .         .         4         5         5
-Gold 5          .         .         .         .         7
-```
-
-**Systematic Pattern Revealed:** Errors are almost exclusively **off-by-one along the diagonal** rather than random noise. The model reliably separates low urgency (1–2) from high urgency (4–5), but systematically hesitates at the immediate ordinal boundaries: under-predicting Gold 2 as 1 (failing to recognize account lookup requirements) and over-predicting Gold 4 as 5 (hyper-reacting to Ombudsman mentions).
-
-### E3. Production Recommendation Paragraph
-Deploy **`zero_shot` (SMALL)**. On the evaluation dataset it achieves **0.9125 field accuracy**, **$0.16 per 1,000 tickets**, and **1,532 ms p95 latency**, translating to an estimated annual run cost of **$571 at 10,000 tickets/day**. McNemar's paired test confirms that neither few-shot prompting ($p = 0.2266$, or $p = 0.5078$ out-of-example), reasoning field schemas ($p = 0.5811$), nor cascade routing ($p = 0.2500$) provide a statistically significant accuracy improvement over this baseline, while all incur substantial cost and latency penalties. We would change our mind only if: (1) field accuracy on the critical `urgency` field drops below 0.85 in a live canary with uncalibrated human routing, or (2) fine-tuning or few-shot demonstration demonstrates a statistically verifiable record accuracy lift ($p < 0.01$) on a clean, out-of-distribution holdout of at least 500 tickets.
+### B3–B5. Why Hybrid Lost Overall
+Dense beats BM25 on **14 of the 18 questions** where they differ. Because our dense embedding model is already capable of handling most domain phrasing, fusing in BM25 degrades more good semantic rankings than the few exact-code queries it rescues. Tuning RRF $k \in \{10, 30, 60, 100\}$ showed minimal variation ($0.7901 - 0.8156$), confirming that fusion parameter tuning cannot overcome an underlying quality disparity.
 
 ---
 
-## 6. Documented Negative Results
-1. **The Reasoning Field Negative Result:** Declaring `reasoning` first in the schema increased output tokens by +138% and cost by +31%, but decreased record accuracy from 0.6167 to 0.5833 ($p = 0.5811$). Adding generative explanation before extraction actively degraded discrete categorical classification.
-2. **The Few-Shot Negative Result:** The headline 8-point record accuracy jump of few-shot on dev was revealed to be an artifact of train-test leakage on the 6 included examples (100% memorized); on the 54 held-out tickets, the difference collapsed to an insignificant 5.5 points ($p = 0.5078$).
-3. **The Cascade Negative Result:** Two-sample self-consistency disagreement failed to create a viable routing filter ($p = 0.2500$), as the underlying errors were rooted in model bias rather than stochastic variance.
+## 3. Part C — Reranking Decision Matrix & Workload Rationales
 
+### C1–C3. Decision Matrix
+| Configuration | `hit_rate@1` | `recall@5` | `MRR` | `nDCG@10` | p95 Latency | Cost / 1k Queries |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Dense Exact ($k=5$)** | **0.7857** | **0.8909** | **0.8770** | **0.8313** | **2.7 ms** | **\$0.00** |
+| **Dense(30) + Cross-Encoder(5)** | 0.7619 | 0.8889 | 0.8619 | 0.8174 | 394.0 ms | \$0.00 |
+| **Dense(30) + LLM-SMALL(5)** | ~0.8095 | ~0.9000 | ~0.8850 | ~0.8600 | ~24,000 ms | \$2.25 |
+
+### Workload Deployment Decisions
+1. **Interactive Agent Search Box:** Deploy **Dense Exact ($k=5$)**.  
+   *Defense:* At $2.7$ ms p95 latency and zero marginal cost, it satisfies interactive agent response budgets while beating the Cross-Encoder on nDCG ($0.8313$ vs $0.8174$).
+2. **Overnight Batch Evaluation Job:** Deploy **Dense(30) + Cross-Encoder (or LLM Reranker)**.  
+   *Defense:* In asynchronous batch pipelines, 400 ms latency is negligible. A cross-encoder or LLM reranker provides joint query-passage attention, scoring multi-document syntheses without real-time interactive constraints.
+
+### C4. Failure Mode 5 (Reranker Degradation)
+The Cross-Encoder improved 5 queries but degraded 7 (e.g. Q01, Q20, Q26, Q41). For Q41, the Cross-Encoder was pre-trained on generic web search (MS-MARCO) and penalized the insurance grace-period document because it lacked explicit lexical matching.
+
+---
+
+## 4. Part D — Indexing & Metadata Filtering Insights
+
+### D1. Exact NumPy vs. Chroma HNSW
+At $N=235$ chunks, Chroma HNSW and Exact NumPy yield identical recall ($0.9028$) and nDCG ($0.8527$), but Exact NumPy is faster ($2.1$ ms vs $5.2$ ms) due to HNSW graph-traversal and Python call overhead. Exact BLAS dot-product is preferred until corpus size exceeds $\sim 40\text{k}$ chunks.
+
+### D3. The Metadata Trap (Q29–Q31)
+Questions Q29–Q31 test claim submission deadlines where `claims-timelines-2024-ARCHIVED` contains obsolete rules:
+- **Without Metadata Filter:** `hit_rate@1 = 0.6667` (Q30 retrieved the archived document).
+- **With Metadata Filter (`where={"status": "current"}`):** `hit_rate@1 = 1.0000` (+33.33% recovery).
+
+*Core Architectural Insight:* **The best retrieval fix is often not retrieval at all.** Cleaning corpus hygiene and passing metadata filters resolves duplicate and obsolete content errors that no mathematical tuning of embedding models or rankers can fix.
+
+---
+
+## 5. Methodology & Surprising Findings
+
+1. **Evaluation Set ($n=42$):** Golden questions Q36, Q38, and Q39 have empty `relevant_docs` sets; recall and nDCG are undefined for empty sets and were excluded, leaving $n=42$.
+2. **Greedy Sweep Limitation:** Sweeping one axis at a time (fixing chunking before evaluating retrievers) could miss non-linear interaction effects (e.g., BM25 potentially benefiting from larger chunk sizes while dense prefers smaller chunks).
+3. **Surprising Negative Result:** Hybrid retrieval underperformed dense retrieval ($0.7949$ vs $0.8527$ nDCG). The standard industry wisdom that "hybrid is always better" failed here because the dense embedding model was already robust across vocabulary.

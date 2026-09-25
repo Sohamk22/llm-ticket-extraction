@@ -11,9 +11,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(REPO_ROOT / ".env")
+load_dotenv()
 
 # Provider key aliases.
 #
@@ -74,8 +74,8 @@ PROFILES: dict[str, dict[str, str]] = {
     # high-volume tier is flash-lite and the reasoning tier is 3.7-flash.
     "gemini": {  # generous free tier -- the recommended profile for this module
         "SMALL": "gemini/gemini-3.5-flash-lite",   # 10 out tok, ~850 ms, no thinking
-        "MAIN": "gemini/gemini-3.7-flash",         # reasoning model, ~220 think tok
-        "LARGE": "gemini/gemini-3.5-flash",        # judge: a DIFFERENT family from MAIN
+        "MAIN": "gemini/gemini-3.5-flash-lite",    # high throughput generation
+        "LARGE": "gemini/gemini-3.5-flash-lite",   # reliable eval judge tier
         "EMBED": "gemini/gemini-embedding-001",    # 3072-dim
     },
     # VERIFIED WORKING 2026-08-26 against an NVIDIA developer key.

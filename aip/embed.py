@@ -56,13 +56,32 @@ def _embed_uncached(texts: list[str], model: str,
     kwargs = {"model": model, "input": texts, "timeout": settings.timeout_s}
     if _supports_input_type(model):
         kwargs["input_type"] = input_type
-    resp = embedding(**kwargs)
-    pt = int(getattr(resp.usage, "prompt_tokens", 0) or 0)
-    cost.record(
-        cost.Usage(model, pt, 0, cost.price_of(model, pt, 0), 0.0, cached=False,
-                   calls=1, priced=cost.is_priced(model))
-    )
-    return [d["embedding"] for d in resp.data]
+
+    last_exc = None
+    for attempt in range(max(settings.max_retries, 5)):
+        try:
+            resp = embedding(**kwargs)
+            pt = int(getattr(resp.usage, "prompt_tokens", 0) or 0)
+            cost.record(
+                cost.Usage(model, pt, 0, cost.price_of(model, pt, 0), 0.0, cached=False,
+                           calls=1, priced=cost.is_priced(model))
+            )
+            return [d["embedding"] for d in resp.data]
+        except Exception as exc:
+            last_exc = exc
+            sleep_time = min(60.0, (2 ** attempt) * 2.0 + 1.0)
+            msg = str(exc)
+            if "retry in " in msg:
+                try:
+                    delay_s = float(msg.split("retry in ")[1].split("s")[0].strip())
+                    sleep_time = max(sleep_time, delay_s + 1.0)
+                except Exception:
+                    pass
+            time.sleep(sleep_time)
+
+    if last_exc:
+        raise last_exc
+    return []
 
 
 def _pack(vec) -> dict:

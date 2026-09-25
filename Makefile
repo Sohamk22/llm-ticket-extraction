@@ -1,4 +1,4 @@
-.PHONY: help venv setup check ratecheck offline data test lint cost docs quiz clean
+.PHONY: help venv setup setup-full check ratecheck offline data test lint cost docs quiz clean
 
 # ---------------------------------------------------------------------------
 # Which Python to use, in order of preference:
@@ -48,6 +48,8 @@ venv:
 
 setup: venv
 	@$(MAKE) --no-print-directory _install
+
+setup-full: setup
 
 _install:
 	$(PYTHON) -m pip install --upgrade pip
