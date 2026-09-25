@@ -1,0 +1,74 @@
+[
+  {
+    "id": "Q05",
+    "kind": "single_hop",
+    "mode": 2,
+    "mode_name": "chunk_boundary",
+    "evidence": "chunk_boundary: gold fact split across 400-char markdown chunks (Chunk 2 has 30 days, Chunk 3 has continuity rules)",
+    "question": "How long is the grace period for an annual policy?",
+    "answer": "The grace period for an annual policy is 30 days [1]."
+  },
+  {
+    "id": "Q08",
+    "kind": "single_hop",
+    "mode": 2,
+    "mode_name": "chunk_boundary",
+    "evidence": "needs_human_check: doc in top 5, inspect chunk boundaries around gold answer",
+    "question": "Can I claim for IVF treatment?",
+    "answer": "I don't have enough information in the provided sources to answer that."
+  },
+  {
+    "id": "Q10",
+    "kind": "single_hop",
+    "mode": 2,
+    "mode_name": "chunk_boundary",
+    "evidence": "needs_human_check: doc in top 5, inspect chunk boundaries around gold answer",
+    "question": "Who can I escalate to if Aurora rejects my claim and their internal response is unsatisfactory?",
+    "answer": "If Aurora's final response is unsatisfactory, or if they have not responded within 30 days of the original complaint, you may approach the Insurance Ombudsman for your region [1]."
+  },
+  {
+    "id": "Q17",
+    "kind": "single_hop",
+    "mode": 2,
+    "mode_name": "chunk_boundary",
+    "evidence": "needs_human_check: doc in top 5, inspect chunk boundaries around gold answer",
+    "question": "Does Aurora use a TPA?",
+    "answer": "I don't have enough information in the provided sources to answer that."
+  },
+  {
+    "id": "Q23",
+    "kind": "multi_hop",
+    "mode": 6,
+    "mode_name": "generation",
+    "evidence": "generation failure: model still incorrect or incomplete even with full gold context",
+    "question": "Can I get an out-patient physiotherapy session reimbursed on Bronze?",
+    "answer": "I don't have enough information in the provided sources to answer that."
+  },
+  {
+    "id": "Q25",
+    "kind": "multi_hop",
+    "mode": 2,
+    "mode_name": "chunk_boundary",
+    "evidence": "needs_human_check: doc in top 5, inspect chunk boundaries around gold answer",
+    "question": "How much would a caesarean cost me out of pocket on Gold if the hospital bills 1,60,000?",
+    "answer": "I don't have enough information in the provided sources to answer that."
+  },
+  {
+    "id": "Q29",
+    "kind": "trap_archived",
+    "mode": 6,
+    "mode_name": "generation",
+    "evidence": "generation: distractor motor claims timeline confused generation despite correct health timeline present",
+    "question": "How many days do I have to respond to a query Aurora raises on my claim?",
+    "answer": "Depending on the type of claim, the deadline to respond to a query raised by Aurora is:\n\n* **45 days** from the date of the query for general claims [2][5].\n* **30 days** from the date of the query for Aurora Motor Insurance claims [4]."
+  },
+  {
+    "id": "Q32",
+    "kind": "aggregation",
+    "mode": 6,
+    "mode_name": "generation",
+    "evidence": "generation: overview chunk in top 5; generator omitted Bronze/Silver conditional co-payment details",
+    "question": "Which plans have no co-payment?",
+    "answer": "Based on the provided sources, the plans that have no co-payment are:\n\n* **Aurora Gold Plan:** Has a nil co-payment at all ages [1].\n* **Aurora Silver Plan:** Has no co-payment below age 60 [2].\n* **Certain Aurora Group Health Corporate Plan variants:** Specifically, two of the variants have a \"Nil\""
+  }
+]
