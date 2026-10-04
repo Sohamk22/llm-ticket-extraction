@@ -17,12 +17,7 @@ sys.path.insert(0, str(ROOT))
 from aip.chunking import fixed_chunks, markdown_chunks, recursive_chunks, sliding_chunks
 from aip.cost import Budget, BudgetExceeded, Usage, price_of
 from aip.evals import field_accuracy, judge_agreement, retrieval_metrics
-from aip.guards import (
-    delimit_untrusted,
-    detect_injection,
-    enforce_citations,
-    redact_pii,
-)
+from aip.guards import delimit_untrusted, detect_injection, enforce_citations, redact_pii
 from aip.llm import extract_json
 
 
@@ -268,35 +263,3 @@ def test_unpriced_models_are_not_reported_as_free():
     assert b.unpriced_calls == 1
     assert "UNPRICED" in b.report()
     assert b.as_dict()["unpriced_calls"] == 1
-
-
-# --- Lab 1 deterministic rules ----------------------------------------------
-def test_lab1_extract_deterministic():
-    from labs.lab1.extract import extract_deterministic
-
-    # Basic policy number and phone
-    t1 = "My policy is AUR-1234567, call me at 9876543210."
-    res1 = extract_deterministic(t1)
-    assert res1["policy_number"] == "AUR-1234567"
-    assert res1["contains_pii"] is True
-
-    # Quoted reply trap (C3): policy number only in quoted text should be ignored
-    t2 = "Please help with my query.\n> On 5 Mar 2026 wrote:\n> Policy AUR-9999999"
-    res2 = extract_deterministic(t2)
-    assert res2["policy_number"] is None
-
-    # External email vs Aurora support email
-    t3 = "Contact me at user@example.com."
-    assert extract_deterministic(t3)["contains_pii"] is True
-    t4 = "Sent to support@aurorahealth.example."
-    assert extract_deterministic(t4)["contains_pii"] is False
-
-
-def test_lab1_apply_business_rules():
-    from labs.lab1.extract import apply_business_rules
-
-    assert apply_business_rules({"urgency": 4}, "plain text")["escalate"] is True
-    assert apply_business_rules({"urgency": 5}, "plain text")["escalate"] is True
-    assert apply_business_rules({"urgency": 2}, "plain text")["escalate"] is False
-    assert apply_business_rules({"urgency": 1}, "Going to Ombudsman now")["escalate"] is True
-

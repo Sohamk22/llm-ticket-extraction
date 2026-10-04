@@ -20,7 +20,8 @@ import json
 import random
 import re
 import time
-from typing import Any, Sequence, Type, TypeVar
+from collections.abc import Sequence
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -137,18 +138,19 @@ def raw_call(
 
     last_exc: Exception | None = None
     with tracing.trace("llm.call", model=model, cached=False) as span:
-        for attempt in range(max(settings.max_retries, 6)):
+        max_attempts = max(settings.max_retries, 6)
+        for attempt in range(max_attempts):
             t0 = time.perf_counter()
             try:
                 resp = completion(**kwargs)
                 break
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
-                if not _is_retryable(exc) or attempt == max(settings.max_retries, 6) - 1:
+                if not _is_retryable(exc) or attempt == max_attempts - 1:
                     span["error_kind"] = type(exc).__name__
                     raise
-                # Exponential backoff with jitter
-                sleep_s = min(30.0, 2.0 ** attempt + random.uniform(1.0, 3.0))
+                # Exponential backoff with full jitter
+                sleep_s = min(30.0, (2 ** attempt) * 1.5 + random.uniform(1.0, 3.0))
                 msg = str(exc).lower()
                 if "retry in " in msg:
                     try:
@@ -264,7 +266,7 @@ def extract_json(text: str) -> Any:
 def structured(
     prompt_or_messages: str | Messages,
     *,
-    schema: Type[T],
+    schema: type[T],
     system: str | None = None,
     tier: str = "SMALL",
     model: str | None = None,
